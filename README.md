@@ -52,7 +52,7 @@ Each row gets its own directory under `outputs/batch/<behavior-id-or-name>/` con
 
 
 ## run this for full harmbench
-export OPENROUTER_API_KEY="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"
+export OPENROUTER_API_KEY="your_key_here"
 
 python batch_generate.py --csv harmbench_behaviors_text_test.csv --output-root outputs/batch_harmbench --seed 0 --distractor-count -1
 
