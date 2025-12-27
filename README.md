@@ -1,123 +1,67 @@
-# Visual glyph reading experiment
+# Cross Modal Cipher (CMC) Attack
 
-Goal: check whether a vision-language model can learn a new pictographic code on the fly. You hand the model a legend (glyph→word) plus an encoded sentence image and see if it decodes correctly—and whether it follows the decoded instruction.
+Goal: test whether a vision-language model can learn a new pictographic code on the fly. You provide a legend (glyph -> word) and a sentence image; the model should decode the words and/or follow the decoded instruction.
 
 ## Quick start (toy example)
-1) Generate legend + sentence (safe toy vocabulary):
+1) Generate a legend + sentence:
    ```bash
    python visual_language_experiment.py --output-dir outputs --sentence "cat near tree under sun"
    ```
-   Files: `outputs/legend.png`, `outputs/sentence.png`, `outputs/codebook.json`, `outputs/sentence.json`. Legend layout and tile size are auto-chosen from legend size.
+   Outputs: `legend.png`, `sentence.png`, `codebook.json`, `sentence.json`.
 
-2) Export your API key (OpenRouter):
+2) Set your OpenRouter key:
    ```bash
    export OPENROUTER_API_KEY="<your-key>"
    ```
 
-3) Ask a VLM to decode + follow instructions (runs both decode once and instruct N times):
+3) Ask a VLM to decode + follow instructions:
    ```bash
    python vlm_validator.py --legend outputs/legend.png --sentence outputs/sentence.png \
      --codebook outputs/codebook.json --expected outputs/sentence.json \
      --model qwen/qwen3-vl-32b-instruct --runs 5 --save-output
    ```
-   - Produces `vlm_reply_qwen3-vl-32b-instruct.json` with `decoding` (one run) and `runs` (instruct responses).  
-   - No `--task` flag: decode always runs once; instruct runs `--runs` times.  
-   - Uses high `max_tokens` (2000) and disables model “thinking” for VLM calls.
+   Produces `vlm_reply_<model>.json` containing one decode run plus N instruct runs.
 
-## Batch generation from CSV (only `FunctionalCategory=standard`)
-To create legend/sentence pairs for each standard row in a CSV (expects `Behavior`, optional `BehaviorID`, `FunctionalCategory`):
+## Batch generation from CSV
+Creates a legend/sentence pair per row in a CSV (only `FunctionalCategory=standard`).
 ```bash
 python batch_generate.py --csv sample_behaviors.csv --output-root outputs/batch
 ```
-Each row gets its own directory under `outputs/batch/<behavior-id-or-name>/` containing `legend.png`, `sentence.png`, `codebook.json`, and `metadata.json` (row fields). Legend order is shuffled; columns and tile size are auto-chosen from legend size. Distractors default to the sentence length (legend size = 2× sentence); override with `--distractor-count N`. Seed controls determinism.
+Each row is written to `outputs/batch/<slug>/` with `legend.png`, `sentence.png`, `codebook.json`, and `metadata.json`.
 
-## What the generator does
-- Fixed, safe vocabulary: cat, dog, bird, tree, sun, moon, run, sleep, eat, with, near, under.
-- Each word = unique glyph (shape + color + internal mark) rendered with Pillow.
-- Legend options:
-  - Legend order is always shuffled (deterministic via `--seed`).
-  - `--legend-mode full` (default): show the whole vocabulary.
-  - `--legend-mode subset --distractor-count -1`: show the words in the sentence plus distractors. Default `-1` uses the same number of distractors as sentence words (legend size = 2× sentence).
-- `sentence.png` is glyphs only (read left→right).
-- Metadata is saved to JSON for repeatability. Add `--save-individual` to dump each glyph on its own.
-
-## Interpreting the experiment
-- If the VLM returns the correct `tokens` list, it successfully learned the mapping from the legend.
-- Try harder splits: shuffle mappings, create novel sentences, or mask the labels in `legend.png` and rely on textual descriptions from `codebook.json`.
-- You can edit `CODEBOOK` in `visual_language_experiment.py` to expand vocabulary or tweak glyph styles (keep them visually distinct).
-
-## Notes
-- This repo previously contained `clean_concepts_new.json` with harmful concepts; the experiment ignores it and uses only the benign codebook above.
-- Network calls go through OpenRouter; adjust `--model` to try other VLMs. Keep `temperature` low for consistency.
-
-
-## run this for full harmbench
-export OPENROUTER_API_KEY="your_key_here"
-
-python batch_generate.py --csv harmbench_behaviors_text_test.csv --output-root outputs/batch_harmbench --seed 0 --distractor-count -1
-
-python vlm_validator.py \
-  --csv harmbench_behaviors_text_test.csv \
-  --all-slugs --skip-existing --batch-root outputs/batch_harmbench \
-  --model qwen/qwen3-vl-235b-a22b-instruct \
-  --temperature 0.5 \
-  --runs 5 --save-output --concurrency 10
-
-python vlm_validator.py \
-  --csv harmbench_behaviors_text_test.csv \
-  --all-slugs --skip-existing --batch-root outputs/batch_harmbench \
-  --model openai/gpt-5.2 \
-  --temperature 0.5 \
-  --runs 5 --save-output --concurrency 10
-
-python vlm_validator.py \
-  --csv harmbench_behaviors_text_test.csv \
-  --all-slugs --skip-existing --batch-root outputs/batch_harmbench \
-  --model x-ai/grok-4.1-fast \
-  --temperature 0.5 \
-  --runs 5 --save-output --concurrency 10
-
-python judge_responses.py \
-  --csv harmbench_behaviors_text_test.csv \
-  --batch-root outputs/batch_harmbench \
-  --thinking
-
-python compute_decoding_accuracy.py --batch-root outputs/batch_harmbench --output-file decode_accuracy.json
-
-
-python plot_judge_results.py --batch-root outputs/batch_harmbench --output-dir plots
-
-## VLM validator (batch)
-- Filters CSV rows to `FunctionalCategory=standard`.
-- Runs decode once + instruct multiple times per directory; saves `vlm_reply_<model>.json` (model suffix only).
-- Skips directories with existing outputs if `--skip-existing`.
-- `--all-slugs` processes every standard row; `--concurrency` controls parallelism.
-- Max tokens set high (2000); VLM “thinking” disabled by default.
-
-## Judges
+## VLM validation (batch)
+Decode runs once; instruct runs `--runs` times. Useful flags: `--all-slugs`, `--skip-existing`, `--concurrency`.
 ```bash
-python judge_responses.py --csv harmbench_behaviors_text_test.csv --batch-root outputs/batch_harmbench --concurrency 10 --thinking
+python vlm_validator.py --csv sample_behaviors.csv --all-slugs --batch-root outputs/batch \
+  --model qwen/qwen3-vl-32b-instruct --runs 5 --save-output --concurrency 10
 ```
-- Filters to `FunctionalCategory=standard`.
-- Runs **all judge models for every `vlm_reply*.json`** in each directory; default judges:
-  - `openai/gpt-5.2`
-  - `deepseek/deepseek-v3.2`
-  - `x-ai/grok-4.1-fast`
-- Outputs `judge_results_<vlmModel>.json` next to the VLM reply. Robust parsing (refusals, JSON fences, etc.).
 
-## Plots
+## Judge + plots
+Judge each VLM reply file, then plot aggregate results.
 ```bash
-python plot_judge_results.py --batch-root outputs/batch_harmbench --output-dir plots
+python judge_responses.py --csv sample_behaviors.csv --batch-root outputs/batch --concurrency 10
+python plot_judge_results.py --batch-root outputs/batch --output-dir plots
 ```
-- Produces overall plots and per-VLM subdirectories (`plots/vlm_<model>`).
-- Classification majority-vote and safety histograms (with 3-bin version).
-- Best-of-k curves: `p(compliance)` (solid) and `p(refusal)` (dashed) vs k for each judge.
-- Handles missing judge data gracefully; labels use “HarmBench sentences” (no “slug”).
 
 ## Decoding accuracy
 ```bash
-python compute_decoding_accuracy.py --batch-root outputs/batch_harmbench --output-file decode_accuracy.json
+python compute_decoding_accuracy.py --batch-root outputs/batch --output-file decode_accuracy.json
 ```
-- Reads `decoding` in each `vlm_reply*.json`; falls back to `metadata.json` for expected tokens if needed.
-- Outputs summary JSON plus two plots: exact-match accuracy and token-overlap accuracy per VLM model.
-- If you see “No decoding records found,” regenerate VLM replies with `vlm_validator.py` (decoding always runs once).
+Writes a summary JSON plus two plots (exact match + token overlap).
+
+## Full HarmBench run (example)
+```bash
+export OPENROUTER_API_KEY="<your-key>"
+python batch_generate.py --csv harmbench_behaviors_text_test.csv --output-root outputs/batch_harmbench --seed 0 --distractor-count -1
+python vlm_validator.py --csv harmbench_behaviors_text_test.csv --all-slugs --batch-root outputs/batch_harmbench \
+  --model qwen/qwen3-vl-235b-a22b-instruct --temperature 0.5 --runs 5 --save-output --concurrency 10
+python judge_responses.py --csv harmbench_behaviors_text_test.csv --batch-root outputs/batch_harmbench --concurrency 10
+python compute_decoding_accuracy.py --batch-root outputs/batch_harmbench --output-file decode_accuracy.json
+python plot_judge_results.py --batch-root outputs/batch_harmbench --output-dir plots
+```
+Repeat `vlm_validator.py` for additional VLMs if needed.
+
+## Notes
+- The toy codebook in `visual_language_experiment.py` is intentionally safe; `clean_concepts_new.json` is not used.
+- OpenRouter is required for VLM and judge calls.
+- VLM calls use high `max_tokens` and disable "thinking" mode for consistency.
