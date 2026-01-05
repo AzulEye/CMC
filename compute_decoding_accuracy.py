@@ -12,6 +12,38 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
+IMAGE_MODE_TAG = "img"
+
+
+def append_tag_to_path(path: Path, tag: str) -> Path:
+    if not tag:
+        return path
+    if path.stem.endswith(f"_{tag}"):
+        return path
+    return path.with_name(f"{path.stem}_{tag}{path.suffix}")
+
+
+def infer_mode_tag(batch_root: Path) -> str:
+    for sub in batch_root.iterdir():
+        if not sub.is_dir():
+            continue
+        for vf in sub.glob("vlm_reply*.json"):
+            try:
+                data = json.loads(vf.read_text())
+            except json.JSONDecodeError:
+                continue
+            if data.get("glyph_mode") == "images":
+                return IMAGE_MODE_TAG
+        codebook = sub / "codebook.json"
+        if codebook.exists():
+            try:
+                data = json.loads(codebook.read_text())
+            except json.JSONDecodeError:
+                continue
+            if data.get("glyph_mode") == "images":
+                return IMAGE_MODE_TAG
+    return ""
+
 def load_decoding(path: Path) -> Dict | None:
     try:
         data = json.loads(path.read_text())
@@ -63,7 +95,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Compute decoding accuracy for VLM replies.")
     parser.add_argument("--batch-root", type=Path, default=Path("outputs/batch"), help="Root folder with slug subdirs.")
     parser.add_argument("--output-file", type=Path, default=Path("decode_accuracy.json"), help="Where to write summary JSON.")
+    parser.add_argument("--mode-tag", type=str, default="", help="Optional suffix appended to output filenames.")
     args = parser.parse_args()
+
+    mode_tag = args.mode_tag or infer_mode_tag(args.batch_root)
+    output_file = append_tag_to_path(args.output_file, mode_tag)
 
     rows: List[Dict] = []
     for sub in args.batch_root.iterdir():
@@ -116,8 +152,8 @@ def main() -> None:
         "per_model": per_model_summary,
         "rows": rows,
     }
-    args.output_file.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    print(f"Wrote decoding accuracy to {args.output_file}")
+    output_file.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    print(f"Wrote decoding accuracy to {output_file}")
 
     # Plot accuracy per model
     df = pd.DataFrame.from_records(rows)
@@ -131,7 +167,7 @@ def main() -> None:
         plt.xlabel("VLM model")
         plt.xticks(rotation=20, ha="right")
         plt.tight_layout()
-        plot_path = args.output_file.with_suffix(".png")
+        plot_path = output_file.with_suffix(".png")
         plt.savefig(plot_path, dpi=300)
         plt.close()
         print(f"Wrote decode accuracy plot to {plot_path}")
@@ -146,7 +182,7 @@ def main() -> None:
         plt.xticks(rotation=20, ha="right")
         plt.ylim(0, 1)
         plt.tight_layout()
-        overlap_path = args.output_file.with_name(f"{args.output_file.stem}_overlap.png")
+        overlap_path = output_file.with_name(f"{output_file.stem}_overlap.png")
         plt.savefig(overlap_path, dpi=300)
         plt.close()
         print(f"Wrote token-overlap decode accuracy plot to {overlap_path}")

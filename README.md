@@ -29,6 +29,20 @@ python batch_generate.py --csv sample_behaviors.csv --output-root outputs/batch
 ```
 Each row is written to `outputs/batch/<slug>/` with `legend.png`, `sentence.png`, `codebook.json`, and `metadata.json`.
 
+## Image glyph mode (realistic tiles)
+1) Generate 100 object tiles (128x128):
+   ```bash
+   export OPENROUTER_API_KEY="<your-key>"
+   python generate_object_images.py --output-dir assets/object_tiles
+   ```
+   Defaults to 1024x1024 generation and downscales to 128x128 for tiles; override with
+   `--gen-size` and `--output-size` if needed.
+2) Use them as glyphs (outputs auto-suffixed with `_img`):
+   ```bash
+   python batch_generate.py --csv sample_behaviors.csv --output-root outputs/batch \
+     --glyph-mode images --glyph-image-dir assets/object_tiles
+   ```
+
 ## VLM validation (batch)
 Decode runs once; instruct runs `--runs` times. Useful flags: `--all-slugs`, `--skip-existing`, `--concurrency`.
 ```bash
@@ -52,14 +66,25 @@ Writes a summary JSON plus two plots (exact match + token overlap).
 ## Full HarmBench run (example)
 ```bash
 export OPENROUTER_API_KEY="<your-key>"
-python batch_generate.py --csv harmbench_behaviors_text_test.csv --output-root outputs/batch_harmbench --seed 0 --distractor-count -1
-python vlm_validator.py --csv harmbench_behaviors_text_test.csv --all-slugs --batch-root outputs/batch_harmbench \
-  --model qwen/qwen3-vl-235b-a22b-instruct --temperature 0.5 --runs 5 --save-output --concurrency 10
-python judge_responses.py --csv harmbench_behaviors_text_test.csv --batch-root outputs/batch_harmbench --concurrency 10
-python compute_decoding_accuracy.py --batch-root outputs/batch_harmbench --output-file decode_accuracy.json
-python plot_judge_results.py --batch-root outputs/batch_harmbench --output-dir plots
+bash scripts/run_harmbench_full.sh
 ```
-Repeat `vlm_validator.py` for additional VLMs if needed.
+Override defaults with env vars like `MODEL=...`, `RUNS=...`, `BATCH_ROOT=...`.
+
+## Full HarmBench run (image glyphs)
+```bash
+export OPENROUTER_API_KEY="<your-key>"
+bash scripts/run_harmbench_full_images.sh
+```
+Defaults use tiles from `assets/object_tiles` and write to `outputs/batch_harmbench_img`.
+
+## Best-of-k with different ciphers
+Generate multiple cipher variants (different seeds), run each once, then merge runs:
+```bash
+bash scripts/run_harmbench_best_of_k_ciphers.sh
+```
+Defaults write per-seed runs to `outputs/batch_harmbench_cipher_seed*` and merged runs to
+`outputs/batch_harmbench_multicipher`. Override with `SEEDS=...`, `SEED_ROOT_PREFIX=...`,
+or `MERGED_ROOT=...`.
 
 ## Notes
 - The toy codebook in `visual_language_experiment.py` is intentionally safe; `clean_concepts_new.json` is not used.

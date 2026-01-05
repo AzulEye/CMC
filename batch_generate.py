@@ -23,11 +23,14 @@ from visual_language_experiment import (
     GlyphSpec,
     export_codebook_json,
     export_sentence_json,
+    list_image_paths,
+    relative_image_path,
     render_legend,
     render_sentence,
 )
 
 Color = Tuple[int, int, int]
+IMAGE_MODE_TAG = "img"
 
 # Palette (rgb, name)
 PALETTE: List[Tuple[Color, str]] = [
@@ -185,6 +188,14 @@ DISTRACTOR_WORDS: List[str] = [
 ]
 
 
+def apply_dir_tag(path: Path, tag: str | None) -> Path:
+    if not tag:
+        return path
+    if path.name.endswith(f"_{tag}"):
+        return path
+    return path.with_name(f"{path.name}_{tag}")
+
+
 def tokenize(text: str) -> List[str]:
     return re.findall(r"[a-z0-9']+", text.lower())
 
@@ -197,6 +208,15 @@ def unique(seq: Sequence[str]) -> List[str]:
             seen.add(item)
             out.append(item)
     return out
+
+
+def build_vocab_tokens(tokens: List[str], distractor_count: int, rng: random.Random) -> List[str]:
+    vocab_tokens = list(tokens)
+    pool = [w for w in DISTRACTOR_WORDS if w not in vocab_tokens]
+    if distractor_count > len(pool):
+        pool.extend([f"extra{idx}" for idx in range(distractor_count - len(pool))])
+    vocab_tokens.extend(rng.sample(pool, k=distractor_count))
+    return vocab_tokens
 
 
 def slugify(text: str, fallback: str, index: int, used: set[str]) -> str:
@@ -228,11 +248,7 @@ def build_codebook(tokens: List[str], distractor_count: int, rng: random.Random)
     if needed > len(combos):
         raise ValueError(f"Not enough glyph combos for {needed} tokens; available {len(combos)}")
 
-    vocab_tokens = list(tokens)
-    pool = [w for w in DISTRACTOR_WORDS if w not in vocab_tokens]
-    if distractor_count > len(pool):
-        pool.extend([f"extra{idx}" for idx in range(distractor_count - len(pool))])
-    vocab_tokens.extend(rng.sample(pool, k=distractor_count))
+    vocab_tokens = build_vocab_tokens(tokens, distractor_count, rng)
 
     specs: List[GlyphSpec] = []
     for token, (shape, mark, color, cname) in zip(vocab_tokens, combos):
@@ -241,11 +257,41 @@ def build_codebook(tokens: List[str], distractor_count: int, rng: random.Random)
     return specs
 
 
+def build_image_codebook(
+    tokens: List[str],
+    distractor_count: int,
+    rng: random.Random,
+    image_paths: List[Path],
+    image_root: Path,
+) -> List[GlyphSpec]:
+    vocab_tokens = build_vocab_tokens(tokens, distractor_count, rng)
+    needed = len(vocab_tokens)
+    if needed > len(image_paths):
+        raise ValueError(f"Not enough images for {needed} tokens; available {len(image_paths)}")
+    chosen = rng.sample(image_paths, k=needed)
+    specs: List[GlyphSpec] = []
+    for token, img_path in zip(vocab_tokens, chosen):
+        desc = f"image tile {img_path.stem}"
+        specs.append(
+            GlyphSpec(
+                token,
+                "image",
+                (255, 255, 255),
+                "image",
+                desc,
+                image_path=relative_image_path(img_path, image_root),
+            )
+        )
+    return specs
+
+
 def process_row(
     row: Dict[str, str],
     index: int,
     args: argparse.Namespace,
     used_slugs: set[str],
+    image_paths: List[Path] | None,
+    image_root: Path | None,
 ) -> None:
     if (row.get("FunctionalCategory") or "").strip().lower() != "standard":
         return
@@ -264,7 +310,22 @@ def process_row(
 
     rng = random.Random(args.seed + index)
     auto_distractors = len(tokens)
-    codebook = build_codebook(tokens, distractor_count=auto_distractors if args.distractor_count < 0 else args.distractor_count, rng=rng)
+    if args.glyph_mode == "images":
+        if not image_paths or not image_root:
+            raise ValueError("Image glyph mode requires a non-empty image directory.")
+        codebook = build_image_codebook(
+            tokens,
+            distractor_count=auto_distractors if args.distractor_count < 0 else args.distractor_count,
+            rng=rng,
+            image_paths=image_paths,
+            image_root=image_root,
+        )
+    else:
+        codebook = build_codebook(
+            tokens,
+            distractor_count=auto_distractors if args.distractor_count < 0 else args.distractor_count,
+            rng=rng,
+        )
     codebook_by_word = {spec.word: spec for spec in codebook}
     legend_specs = list(codebook)
     rng.shuffle(legend_specs)
@@ -283,9 +344,15 @@ def process_row(
     cols = args.legend_cols if args.legend_cols > 0 else auto_cols(len(legend_specs))
     tile_size = args.tile_size if args.tile_size > 0 else auto_tile(len(legend_specs))
 
-    render_legend(legend_specs, tile_size, cols=cols, output_path=legend_path)
-    render_sentence(tokens, codebook_by_word, tile_size, output_path=sentence_path)
-    export_codebook_json(legend_specs, tile_size, output_path=codebook_json)
+    render_legend(legend_specs, tile_size, cols=cols, output_path=legend_path, image_root=image_root)
+    render_sentence(tokens, codebook_by_word, tile_size, output_path=sentence_path, image_root=image_root)
+    export_codebook_json(
+        legend_specs,
+        tile_size,
+        output_path=codebook_json,
+        glyph_mode=args.glyph_mode,
+        image_root=image_root,
+    )
 
     meta = {
         "behavior": behavior,  # canonical copy
@@ -293,7 +360,10 @@ def process_row(
         "legend_tokens": [spec.word for spec in legend_specs],
         "row_index": index,
         "csv": str(args.csv),
+        "glyph_mode": args.glyph_mode,
     }
+    if image_root:
+        meta["image_root"] = str(image_root)
     for k, v in row.items():
         if k == "Behavior":
             continue  # avoid redundant copy; we keep the trimmed/normalized behavior field
@@ -316,10 +386,37 @@ def main() -> None:
         default=-1,
         help="Number of distractor glyphs per legend. -1 = auto (match sentence length).",
     )
+    parser.add_argument(
+        "--glyph-mode",
+        choices=["abstract", "images"],
+        default="abstract",
+        help="abstract = geometric glyphs; images = sample tiles from a directory.",
+    )
+    parser.add_argument(
+        "--glyph-image-dir",
+        type=Path,
+        default=Path("assets/object_tiles"),
+        help="Directory with image tiles used when --glyph-mode images.",
+    )
+    parser.add_argument(
+        "--mode-tag",
+        type=str,
+        default="",
+        help="Optional suffix appended to output-root when set.",
+    )
     args = parser.parse_args()
 
     if not args.csv.exists():
         raise SystemExit(f"CSV not found: {args.csv}")
+
+    mode_tag = args.mode_tag or (IMAGE_MODE_TAG if args.glyph_mode == "images" else "")
+    args.output_root = apply_dir_tag(args.output_root, mode_tag)
+
+    image_paths: List[Path] | None = None
+    image_root: Path | None = None
+    if args.glyph_mode == "images":
+        image_root = args.glyph_image_dir
+        image_paths = list_image_paths(image_root)
 
     args.output_root.mkdir(parents=True, exist_ok=True)
 
@@ -327,7 +424,7 @@ def main() -> None:
         reader = csv.DictReader(f)
         used_slugs: set[str] = set()
         for idx, row in enumerate(reader):
-            process_row(row, idx, args, used_slugs)
+            process_row(row, idx, args, used_slugs, image_paths, image_root)
 
 
 if __name__ == "__main__":

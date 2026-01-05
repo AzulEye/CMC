@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 
 Color = Tuple[int, int, int]
@@ -33,6 +33,7 @@ class GlyphSpec:
     color: Color
     mark: str
     description: str
+    image_path: str | None = None
 
 
 # A compact, non-harmful vocabulary to keep the decoding task safe.
@@ -57,6 +58,67 @@ CODEBOOK: List[GlyphSpec] = [
     GlyphSpec("a", "circle", (156, 220, 246), "bar", "sky-blue circle with a white horizontal bar"),
     GlyphSpec("tent", "triangle", (192, 93, 51), "ring", "terracotta triangle with a white ring"),
 ]
+
+IMAGE_MODE_TAG = "img"
+
+
+def apply_dir_tag(path: Path, tag: str | None) -> Path:
+    if not tag:
+        return path
+    if path.name.endswith(f"_{tag}"):
+        return path
+    return path.with_name(f"{path.name}_{tag}")
+
+
+def list_image_paths(image_dir: Path) -> List[Path]:
+    if not image_dir.exists():
+        raise FileNotFoundError(f"Image directory not found: {image_dir}")
+    exts = {".png", ".jpg", ".jpeg", ".webp"}
+    paths = [p for p in image_dir.iterdir() if p.is_file() and p.suffix.lower() in exts]
+    if not paths:
+        raise FileNotFoundError(f"No images found under {image_dir}")
+    return sorted(paths)
+
+
+def relative_image_path(image_path: Path, image_root: Path | None) -> str:
+    if image_root:
+        try:
+            return str(image_path.relative_to(image_root))
+        except ValueError:
+            pass
+    return str(image_path)
+
+
+def resolve_image_path(image_path: str, image_root: Path | None) -> Path:
+    path = Path(image_path)
+    if path.is_absolute() or not image_root:
+        return path
+    return image_root / path
+
+
+def attach_images_to_specs(
+    specs: List[GlyphSpec],
+    image_paths: List[Path],
+    seed: int,
+    image_root: Path | None,
+) -> List[GlyphSpec]:
+    if len(image_paths) < len(specs):
+        raise ValueError(f"Need {len(specs)} images but only found {len(image_paths)}")
+    rng = random.Random(seed + 4242)
+    chosen = rng.sample(image_paths, k=len(specs))
+    out: List[GlyphSpec] = []
+    for spec, img_path in zip(specs, chosen):
+        out.append(
+            GlyphSpec(
+                spec.word,
+                spec.shape,
+                spec.color,
+                spec.mark,
+                spec.description,
+                image_path=relative_image_path(img_path, image_root),
+            )
+        )
+    return out
 
 
 def rgb_to_hex(rgb: Color) -> str:
@@ -168,7 +230,15 @@ def draw_mark(draw: ImageDraw.ImageDraw, mark: str, size: int) -> None:
         raise ValueError(f"Unknown mark: {mark}")
 
 
-def render_glyph(spec: GlyphSpec, size: int) -> Image.Image:
+def render_glyph(spec: GlyphSpec, size: int, image_root: Path | None = None) -> Image.Image:
+    if spec.image_path:
+        img_path = resolve_image_path(spec.image_path, image_root)
+        img = Image.open(img_path).convert("RGB")
+        img = ImageOps.fit(img, (size, size), method=Image.LANCZOS)
+        draw = ImageDraw.Draw(img)
+        draw.rectangle((1, 1, size - 2, size - 2), outline=(20, 20, 20), width=3)
+        return img
+
     img = Image.new("RGB", (size, size), "white")
     draw = ImageDraw.Draw(img)
     padding = int(size * 0.12)
@@ -178,7 +248,13 @@ def render_glyph(spec: GlyphSpec, size: int) -> Image.Image:
     return img
 
 
-def render_legend(codebook: Iterable[GlyphSpec], size: int, cols: int, output_path: Path) -> None:
+def render_legend(
+    codebook: Iterable[GlyphSpec],
+    size: int,
+    cols: int,
+    output_path: Path,
+    image_root: Path | None = None,
+) -> None:
     specs = list(codebook)
     rows = math.ceil(len(specs) / cols)
     font = ImageFont.load_default()
@@ -196,7 +272,7 @@ def render_legend(codebook: Iterable[GlyphSpec], size: int, cols: int, output_pa
         c = idx % cols
         x = pad + c * (size + gap)
         y = pad + r * (size + label_h + gap)
-        glyph = render_glyph(spec, size)
+        glyph = render_glyph(spec, size, image_root=image_root)
         canvas.paste(glyph, (x, y))
         label = spec.word
         tw = draw.textlength(label, font=font)
@@ -205,7 +281,13 @@ def render_legend(codebook: Iterable[GlyphSpec], size: int, cols: int, output_pa
     canvas.save(output_path)
 
 
-def render_sentence(tokens: List[str], codebook: Dict[str, GlyphSpec], size: int, output_path: Path) -> None:
+def render_sentence(
+    tokens: List[str],
+    codebook: Dict[str, GlyphSpec],
+    size: int,
+    output_path: Path,
+    image_root: Path | None = None,
+) -> None:
     missing = [t for t in tokens if t not in codebook]
     if missing:
         raise ValueError(f"Tokens not in codebook: {missing}")
@@ -218,16 +300,25 @@ def render_sentence(tokens: List[str], codebook: Dict[str, GlyphSpec], size: int
 
     x = pad
     for token in tokens:
-        glyph = render_glyph(codebook[token], size)
+        glyph = render_glyph(codebook[token], size, image_root=image_root)
         canvas.paste(glyph, (x, pad))
         x += size + gap
 
     canvas.save(output_path)
 
 
-def export_codebook_json(codebook: Iterable[GlyphSpec], size: int, output_path: Path) -> None:
+def export_codebook_json(
+    codebook: Iterable[GlyphSpec],
+    size: int,
+    output_path: Path,
+    *,
+    glyph_mode: str = "abstract",
+    image_root: Path | None = None,
+) -> None:
     data = {
         "tile_size": size,
+        "glyph_mode": glyph_mode,
+        "image_root": str(image_root) if image_root else None,
         "codebook": [
             {
                 "word": spec.word,
@@ -235,6 +326,7 @@ def export_codebook_json(codebook: Iterable[GlyphSpec], size: int, output_path: 
                 "color": rgb_to_hex(spec.color),
                 "mark": spec.mark,
                 "description": spec.description,
+                "image_path": spec.image_path,
             }
             for spec in codebook
         ],
@@ -267,16 +359,18 @@ def select_legend_specs(
     distractor_count: int,
     seed: int,
     shuffle: bool,
+    codebook: List[GlyphSpec] | None = None,
 ) -> List[GlyphSpec]:
+    base_codebook = codebook if codebook is not None else CODEBOOK
     if mode == "full":
-        specs = list(CODEBOOK)
+        specs = list(base_codebook)
     else:
         rng = random.Random(seed)
         uniq_sentence = set(unique_tokens(sentence_tokens))
-        remaining = [spec for spec in CODEBOOK if spec.word not in uniq_sentence]
+        remaining = [spec for spec in base_codebook if spec.word not in uniq_sentence]
         distractors = rng.sample(remaining, k=min(distractor_count, len(remaining)))
         chosen = uniq_sentence.union({d.word for d in distractors})
-        specs = [spec for spec in CODEBOOK if spec.word in chosen]
+        specs = [spec for spec in base_codebook if spec.word in chosen]
 
     if shuffle:
         rng = random.Random(seed + 99991)
@@ -317,16 +411,41 @@ def parse_args() -> argparse.Namespace:
         default=-1,
         help="Number of extra random glyphs when legend-mode=subset. -1 = auto (match sentence length).",
     )
+    parser.add_argument(
+        "--glyph-mode",
+        choices=["abstract", "images"],
+        default="abstract",
+        help="abstract = geometric glyphs; images = sample tiles from a directory.",
+    )
+    parser.add_argument(
+        "--glyph-image-dir",
+        type=Path,
+        default=Path("assets/object_tiles"),
+        help="Directory with image tiles used when --glyph-mode images.",
+    )
+    parser.add_argument(
+        "--mode-tag",
+        type=str,
+        default="",
+        help="Optional suffix appended to output directory when set.",
+    )
     parser.add_argument("--seed", type=int, default=0, help="Seed for distractor sampling.")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    mode_tag = args.mode_tag or (IMAGE_MODE_TAG if args.glyph_mode == "images" else "")
+    args.output_dir = apply_dir_tag(args.output_dir, mode_tag)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     sentence_tokens = [t.strip().lower() for t in args.sentence.split() if t.strip()]
-    codebook_by_word = {spec.word: spec for spec in CODEBOOK}
+    image_root = args.glyph_image_dir if args.glyph_mode == "images" else None
+    codebook_specs = list(CODEBOOK)
+    if image_root:
+        image_paths = list_image_paths(image_root)
+        codebook_specs = attach_images_to_specs(codebook_specs, image_paths, seed=args.seed, image_root=image_root)
+    codebook_by_word = {spec.word: spec for spec in codebook_specs}
     auto_distractors = len(unique_tokens(sentence_tokens))
     legend_specs = select_legend_specs(
         sentence_tokens=sentence_tokens,
@@ -334,6 +453,7 @@ def main() -> None:
         distractor_count=auto_distractors if args.distractor_count < 0 else args.distractor_count,
         seed=args.seed,
         shuffle=True,
+        codebook=codebook_specs,
     )
     legend_count = len(legend_specs)
 
@@ -352,16 +472,19 @@ def main() -> None:
     codebook_json = args.output_dir / "codebook.json"
     sentence_json = args.output_dir / "sentence.json"
 
-    render_legend(legend_specs, tile_size, cols=cols, output_path=legend_path)
-    render_sentence(sentence_tokens, codebook_by_word, tile_size, output_path=sentence_path)
-    export_codebook_json(legend_specs, tile_size, output_path=codebook_json)
-    export_sentence_json(sentence_tokens, output_path=sentence_json)
+    render_legend(legend_specs, tile_size, cols=cols, output_path=legend_path, image_root=image_root)
+    render_sentence(sentence_tokens, codebook_by_word, tile_size, output_path=sentence_path, image_root=image_root)
+    export_codebook_json(legend_specs, tile_size, output_path=codebook_json, glyph_mode=args.glyph_mode, image_root=image_root)
+    extra = {"glyph_mode": args.glyph_mode}
+    if image_root:
+        extra["image_root"] = str(image_root)
+    export_sentence_json(sentence_tokens, output_path=sentence_json, extra=extra)
 
     if args.save_individual:
         indiv_dir = args.output_dir / "glyphs"
         indiv_dir.mkdir(exist_ok=True)
         for spec in legend_specs:
-            render_glyph(spec, tile_size).save(indiv_dir / f"{spec.word}.png")
+            render_glyph(spec, tile_size, image_root=image_root).save(indiv_dir / f"{spec.word}.png")
 
     print(f"Legend written to {legend_path}")
     print(f"Sentence written to {sentence_path}")

@@ -13,6 +13,50 @@ import pandas as pd
 import seaborn as sns
 
 CLASS_LABELS = {0: "refusal", 1: "misunderstanding", 2: "partial", 3: "compliance"}
+IMAGE_MODE_TAG = "img"
+
+
+def apply_dir_tag(path: Path, tag: str | None) -> Path:
+    if not tag:
+        return path
+    if path.name.endswith(f"_{tag}"):
+        return path
+    return path.with_name(f"{path.name}_{tag}")
+
+
+def append_tag_to_filename(filename: str, tag: str) -> str:
+    if not tag:
+        return filename
+    p = Path(filename)
+    if p.stem.endswith(f"_{tag}"):
+        return filename
+    return f"{p.stem}_{tag}{p.suffix}"
+
+
+def tagged_path(output_dir: Path, filename: str, tag: str) -> Path:
+    return output_dir / append_tag_to_filename(filename, tag)
+
+
+def infer_mode_tag(batch_root: Path) -> str:
+    for sub in batch_root.iterdir():
+        if not sub.is_dir():
+            continue
+        for vf in sub.glob("vlm_reply*.json"):
+            try:
+                data = json.loads(vf.read_text())
+            except json.JSONDecodeError:
+                continue
+            if data.get("glyph_mode") == "images":
+                return IMAGE_MODE_TAG
+        codebook = sub / "codebook.json"
+        if codebook.exists():
+            try:
+                data = json.loads(codebook.read_text())
+            except json.JSONDecodeError:
+                continue
+            if data.get("glyph_mode") == "images":
+                return IMAGE_MODE_TAG
+    return ""
 
 
 def collect_records(batch_root: Path) -> pd.DataFrame:
@@ -89,7 +133,7 @@ def collapse_max(df: pd.DataFrame) -> pd.DataFrame:
     return agg
 
 
-def simple_bar(df: pd.DataFrame, output_dir: Path) -> None:
+def simple_bar(df: pd.DataFrame, output_dir: Path, mode_tag: str) -> None:
     if df.empty:
         return
     df = df.copy()
@@ -102,11 +146,11 @@ def simple_bar(df: pd.DataFrame, output_dir: Path) -> None:
     plt.xticks(rotation=20, ha="right")
     plt.legend(title="Classification", bbox_to_anchor=(1.05, 1), loc="upper left")
     plt.tight_layout()
-    plt.savefig(output_dir / "classification_counts_by_judge.png", dpi=300)
+    plt.savefig(tagged_path(output_dir, "classification_counts_by_judge.png", mode_tag), dpi=300)
     plt.close()
 
 
-def simple_safety(df: pd.DataFrame, output_dir: Path) -> None:
+def simple_safety(df: pd.DataFrame, output_dir: Path, mode_tag: str) -> None:
     if df.empty:
         return
     # Compute percentage of runs per safety_score for each judge
@@ -120,7 +164,7 @@ def simple_safety(df: pd.DataFrame, output_dir: Path) -> None:
     plt.xticks(rotation=20, ha="right")
     plt.legend(title="Safety score", bbox_to_anchor=(1.05, 1), loc="upper left")
     plt.tight_layout()
-    plt.savefig(output_dir / "safety_by_judge.png", dpi=300)
+    plt.savefig(tagged_path(output_dir, "safety_by_judge.png", mode_tag), dpi=300)
     plt.close()
 
 
@@ -156,7 +200,7 @@ def average_safety(df: pd.DataFrame) -> pd.DataFrame:
     return agg
 
 
-def plot_majority_classification(df: pd.DataFrame, output_dir: Path) -> None:
+def plot_majority_classification(df: pd.DataFrame, output_dir: Path, mode_tag: str) -> None:
     agg = majority_vote_classification(df)
     if agg.empty:
         return
@@ -172,11 +216,11 @@ def plot_majority_classification(df: pd.DataFrame, output_dir: Path) -> None:
     plt.xlabel("Classification")
     plt.xticks(rotation=15, ha="right")
     plt.tight_layout()
-    plt.savefig(output_dir / "classification_majority_vote.png", dpi=300)
+    plt.savefig(tagged_path(output_dir, "classification_majority_vote.png", mode_tag), dpi=300)
     plt.close()
 
 
-def plot_average_safety(df: pd.DataFrame, output_dir: Path) -> None:
+def plot_average_safety(df: pd.DataFrame, output_dir: Path, mode_tag: str) -> None:
     agg = average_safety(df)
     if agg.empty:
         return
@@ -186,7 +230,7 @@ def plot_average_safety(df: pd.DataFrame, output_dir: Path) -> None:
     plt.xlabel("Average Harmfulness score (across judges)")
     plt.ylabel("Percent of HarmBench sentences")
     plt.tight_layout()
-    plt.savefig(output_dir / "safety_average_over_judges.png", dpi=300)
+    plt.savefig(tagged_path(output_dir, "safety_average_over_judges.png", mode_tag), dpi=300)
     plt.close()
     # binned into 3 equal-width bins
     plt.figure(figsize=(6, 4))
@@ -194,11 +238,11 @@ def plot_average_safety(df: pd.DataFrame, output_dir: Path) -> None:
     plt.xlabel("Average Harmfulness score (across judges)")
     plt.ylabel("Percent of HarmBench sentences")
     plt.tight_layout()
-    plt.savefig(output_dir / "safety_average_over_judges_3bins.png", dpi=300)
+    plt.savefig(tagged_path(output_dir, "safety_average_over_judges_3bins.png", mode_tag), dpi=300)
     plt.close()
 
 
-def plot_best_of_k(df: pd.DataFrame, output_dir: Path) -> None:
+def plot_best_of_k(df: pd.DataFrame, output_dir: Path, mode_tag: str) -> None:
     if df.empty or "run" not in df:
         return
     max_k = int(df["run"].max())
@@ -240,7 +284,7 @@ def plot_best_of_k(df: pd.DataFrame, output_dir: Path) -> None:
         plt.xlabel("Best of k (max over first k runs)")
         plt.ylabel("Mean Harmfulness score")
         plt.tight_layout()
-        plt.savefig(output_dir / "safety_best_of_k.png", dpi=300)
+        plt.savefig(tagged_path(output_dir, "safety_best_of_k.png", mode_tag), dpi=300)
         plt.close()
 
     if prob_records:
@@ -270,7 +314,7 @@ def plot_best_of_k(df: pd.DataFrame, output_dir: Path) -> None:
         plt.ylabel("Probability")
         plt.legend(title="Judge / Metric", bbox_to_anchor=(1.05, 1), loc="upper left")
         plt.tight_layout()
-        plt.savefig(output_dir / "classification_best_of_k.png", dpi=300)
+        plt.savefig(tagged_path(output_dir, "classification_best_of_k.png", mode_tag), dpi=300)
         plt.close()
 
 
@@ -278,8 +322,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Plot judge results simply.")
     parser.add_argument("--batch-root", type=Path, default=Path("outputs/batch"))
     parser.add_argument("--output-dir", type=Path, default=Path("plots"))
+    parser.add_argument("--mode-tag", type=str, default="", help="Optional suffix appended to output filenames.")
     args = parser.parse_args()
 
+    mode_tag = args.mode_tag or infer_mode_tag(args.batch_root)
+    args.output_dir = apply_dir_tag(args.output_dir, mode_tag)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     raw_df = collect_records(args.batch_root)
     if raw_df.empty:
@@ -289,11 +336,11 @@ def main() -> None:
 
     sns.set_theme(style="whitegrid")
     # Overall plots
-    simple_bar(agg_df, args.output_dir)
-    simple_safety(agg_df, args.output_dir)
-    plot_majority_classification(agg_df, args.output_dir)
-    plot_average_safety(agg_df, args.output_dir)
-    plot_best_of_k(raw_df, args.output_dir)
+    simple_bar(agg_df, args.output_dir, mode_tag)
+    simple_safety(agg_df, args.output_dir, mode_tag)
+    plot_majority_classification(agg_df, args.output_dir, mode_tag)
+    plot_average_safety(agg_df, args.output_dir, mode_tag)
+    plot_best_of_k(raw_df, args.output_dir, mode_tag)
     # Decoding accuracy overall
     if "decode_match" in raw_df.columns:
         plt.figure(figsize=(6, 4))
@@ -305,7 +352,7 @@ def main() -> None:
             plt.xlabel("VLM model")
             plt.xticks(rotation=20, ha="right")
             plt.tight_layout()
-            plt.savefig(args.output_dir / "decode_accuracy.png", dpi=300)
+            plt.savefig(tagged_path(args.output_dir, "decode_accuracy.png", mode_tag), dpi=300)
             plt.close()
 
     # Per-VLM plots
@@ -314,11 +361,11 @@ def main() -> None:
         subdir.mkdir(parents=True, exist_ok=True)
         dff_raw = raw_df[raw_df["vlm_model"] == vlm]
         dff = agg_df[agg_df["vlm_model"] == vlm]
-        simple_bar(dff, subdir)
-        simple_safety(dff, subdir)
-        plot_majority_classification(dff, subdir)
-        plot_average_safety(dff, subdir)
-        plot_best_of_k(dff_raw, subdir)
+        simple_bar(dff, subdir, mode_tag)
+        simple_safety(dff, subdir, mode_tag)
+        plot_majority_classification(dff, subdir, mode_tag)
+        plot_average_safety(dff, subdir, mode_tag)
+        plot_best_of_k(dff_raw, subdir, mode_tag)
         if "decode_match" in dff_raw.columns:
             acc = dff_raw.drop_duplicates(subset=["slug", "vlm_model"])[["vlm_model", "decode_match"]].dropna()
             if not acc.empty:
@@ -328,7 +375,7 @@ def main() -> None:
                 plt.xlabel("VLM model")
                 plt.xticks(rotation=20, ha="right")
                 plt.tight_layout()
-                plt.savefig(subdir / "decode_accuracy.png", dpi=300)
+                plt.savefig(tagged_path(subdir, "decode_accuracy.png", mode_tag), dpi=300)
                 plt.close()
 
     print(f"Plots written to {args.output_dir} (overall and per VLM model)")

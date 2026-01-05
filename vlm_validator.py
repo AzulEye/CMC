@@ -38,16 +38,26 @@ def slugify(text: str, fallback: str, index: int, used: set[str]) -> str:
     return slug
 
 
+def append_tag_to_filename(filename: str, tag: str) -> str:
+    if not tag:
+        return filename
+    p = Path(filename)
+    if p.stem.endswith(f"_{tag}"):
+        return filename
+    return f"{p.stem}_{tag}{p.suffix}"
+
+
 def encode_image(path: Path) -> str:
     with path.open("rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
 
 
-def load_codebook(path: Path) -> Tuple[List[str], List[str]]:
+def load_codebook(path: Path) -> Tuple[List[str], List[str], str | None]:
     data = json.loads(path.read_text())
     vocab = [entry["word"] for entry in data["codebook"]]
     descriptions = [f"{entry['word']}: {entry['description']}" for entry in data["codebook"]]
-    return vocab, descriptions
+    glyph_mode = data.get("glyph_mode")
+    return vocab, descriptions, glyph_mode
 
 
 def load_expected_tokens(path: Path) -> List[str]:
@@ -159,6 +169,12 @@ def main() -> None:
     parser.add_argument("--runs", type=int, default=1, help="Number of times to query the VLM (collect all replies)")
     parser.add_argument("--skip-existing", action="store_true", help="Skip directories that already contain output-file")
     parser.add_argument("--concurrency", type=int, default=10, help="How many folders to process in parallel for --all-slugs.")
+    parser.add_argument(
+        "--mode-tag",
+        type=str,
+        default="",
+        help="Optional suffix appended to output filenames (auto if glyph_mode is images).",
+    )
     args = parser.parse_args()
 
     api_key = os.environ.get("OPENROUTER_API_KEY")
@@ -170,24 +186,25 @@ def main() -> None:
         sentence_path = base_dir / "sentence.png"
         codebook_path = base_dir / "codebook.json"
         expected_path = base_dir / "metadata.json"
-        # derive output filename, always append model suffix
-        suffix = args.model.split("/", 1)[1] if "/" in args.model else args.model
-        base_name = args.output_file if args.output_file else "vlm_reply.json"
-        stem = base_name[:-5] if base_name.endswith(".json") else base_name
-        output_fname = f"{stem}_{suffix}.json"
-        output_path = base_dir / output_fname
 
         for p in [legend_path, sentence_path, codebook_path]:
             if not p.exists():
                 raise SystemExit(f"Missing required file: {p}")
 
-        if args.skip_existing and output_path.exists():
-            print(f"Skipping {base_dir}: found existing {output_path}")
-            return
-
         try:
-            vocab, descriptions = load_codebook(codebook_path)
+            vocab, descriptions, glyph_mode = load_codebook(codebook_path)
             expected_tokens = load_expected_tokens(expected_path) if expected_path.exists() else []
+            mode_tag = args.mode_tag or ("img" if glyph_mode == "images" else "")
+            # derive output filename, always append model suffix
+            suffix = args.model.split("/", 1)[1] if "/" in args.model else args.model
+            base_name = args.output_file if args.output_file else "vlm_reply.json"
+            stem = base_name[:-5] if base_name.endswith(".json") else base_name
+            output_fname = append_tag_to_filename(f"{stem}_{suffix}.json", mode_tag)
+            output_path = base_dir / output_fname
+
+            if args.skip_existing and output_path.exists():
+                print(f"Skipping {base_dir}: found existing {output_path}")
+                return
 
             # Decode once
             decode_prompt = build_prompt(vocab, descriptions, task="decode")
@@ -235,6 +252,7 @@ def main() -> None:
                 payload = {
                     "model": args.model,
                     "temperature": args.temperature,
+                    "glyph_mode": glyph_mode or "abstract",
                     "legend": str(legend_path),
                     "sentence": str(sentence_path),
                     "decode_prompt": decode_prompt,
@@ -293,13 +311,14 @@ def main() -> None:
                 if not p.exists():
                     raise SystemExit(f"Missing required file: {p}")
 
-            vocab, descriptions = load_codebook(codebook_path)
+            vocab, descriptions, glyph_mode = load_codebook(codebook_path)
             expected_tokens = load_expected_tokens(expected_path) if expected_path.exists() else []
 
             suffix = args.model.split("/", 1)[1] if "/" in args.model else args.model
             base_name = args.output_file if args.output_file else "vlm_reply.json"
             stem = base_name[:-5] if base_name.endswith(".json") else base_name
-            output_fname = f"{stem}_{suffix}.json"
+            mode_tag = args.mode_tag or ("img" if glyph_mode == "images" else "")
+            output_fname = append_tag_to_filename(f"{stem}_{suffix}.json", mode_tag)
             out_path = Path(output_fname)
 
             decode_prompt = build_prompt(vocab, descriptions, task="decode")
@@ -344,6 +363,7 @@ def main() -> None:
                 payload = {
                     "model": args.model,
                     "temperature": args.temperature,
+                    "glyph_mode": glyph_mode or "abstract",
                     "legend": str(legend_path),
                     "sentence": str(sentence_path),
                     "decode_prompt": decode_prompt,
