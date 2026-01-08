@@ -44,7 +44,7 @@ if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
 fi
 
 CSV="${CSV:-harmbench_behaviors_text_test.csv}"
-DEFAULT_MODELS="qwen/qwen3-vl-235b-a22b-instruct openai/gpt-5.2 x-ai/grok-4.1-fast"
+DEFAULT_MODELS="qwen/qwen3-vl-235b-a22b-instruct openai/gpt-5.2 x-ai/grok-4.1-fast google/gemini-3-flash-preview"
 MODEL="${MODEL:-}"
 MODELS="${MODELS:-}"
 if [[ -z "$MODELS" ]]; then
