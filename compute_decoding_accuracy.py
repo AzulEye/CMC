@@ -94,12 +94,27 @@ def load_decoding(path: Path) -> Dict | None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compute decoding accuracy for VLM replies.")
     parser.add_argument("--batch-root", type=Path, default=Path("outputs/batch"), help="Root folder with slug subdirs.")
-    parser.add_argument("--output-file", type=Path, default=Path("decode_accuracy.json"), help="Where to write summary JSON.")
+    parser.add_argument(
+        "--output-file",
+        type=Path,
+        default=None,
+        help="Where to write summary JSON (default: <batch-root parent>/decode_accuracy.json).",
+    )
+    parser.add_argument(
+        "--plots-dir",
+        type=Path,
+        default=None,
+        help="Directory for plots (default: same directory as output-file).",
+    )
     parser.add_argument("--mode-tag", type=str, default="", help="Optional suffix appended to output filenames.")
     args = parser.parse_args()
 
     mode_tag = args.mode_tag or infer_mode_tag(args.batch_root)
-    output_file = append_tag_to_path(args.output_file, mode_tag)
+    output_file = args.output_file or (args.batch_root.parent / "decode_accuracy.json")
+    output_file = append_tag_to_path(output_file, mode_tag)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    plots_dir = args.plots_dir or output_file.parent
+    plots_dir.mkdir(parents=True, exist_ok=True)
 
     rows: List[Dict] = []
     for sub in args.batch_root.iterdir():
@@ -167,7 +182,7 @@ def main() -> None:
         plt.xlabel("VLM model")
         plt.xticks(rotation=20, ha="right")
         plt.tight_layout()
-        plot_path = output_file.with_suffix(".png")
+        plot_path = plots_dir / output_file.with_suffix(".png").name
         plt.savefig(plot_path, dpi=300)
         plt.close()
         print(f"Wrote decode accuracy plot to {plot_path}")
@@ -182,7 +197,7 @@ def main() -> None:
         plt.xticks(rotation=20, ha="right")
         plt.ylim(0, 1)
         plt.tight_layout()
-        overlap_path = output_file.with_name(f"{output_file.stem}_overlap.png")
+        overlap_path = plots_dir / f"{output_file.stem}_overlap.png"
         plt.savefig(overlap_path, dpi=300)
         plt.close()
         print(f"Wrote token-overlap decode accuracy plot to {overlap_path}")

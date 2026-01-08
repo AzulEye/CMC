@@ -61,7 +61,9 @@ python plot_judge_results.py --batch-root outputs/batch --output-dir plots
 ```bash
 python compute_decoding_accuracy.py --batch-root outputs/batch --output-file decode_accuracy.json
 ```
-Writes a summary JSON plus two plots (exact match + token overlap).
+Writes a summary JSON plus two plots (exact match + token overlap). By default, the JSON
+is written next to the batch root (parent directory), and plots go next to the JSON; override
+with `--output-file` and `--plots-dir`.
 
 ## Full HarmBench run (example)
 ```bash
@@ -75,16 +77,25 @@ Override defaults with env vars like `MODEL=...`, `RUNS=...`, `BATCH_ROOT=...`.
 export OPENROUTER_API_KEY="<your-key>"
 bash scripts/run_harmbench_full_images.sh
 ```
-Defaults use tiles from `assets/object_tiles` and write to `outputs/batch_harmbench_img`.
+Defaults use tiles from `assets/object_tiles` and write under `outputs/experiments/<tag>/`
+(batch outputs auto-suffixed with `_img`).
 
 ## Best-of-k with different ciphers
 Generate multiple cipher variants (different seeds), run each once, then merge runs:
 ```bash
 bash scripts/run_harmbench_best_of_k_ciphers.sh
 ```
-Defaults write per-seed runs to `outputs/batch_harmbench_cipher_seed*` and merged runs to
-`outputs/batch_harmbench_multicipher`. Override with `SEEDS=...`, `SEED_ROOT_PREFIX=...`,
+Defaults write per-seed runs to `outputs/experiments/<tag>/batch_harmbench_cipher_seed*` and merged runs to
+`outputs/experiments/<tag>/batch_harmbench_multicipher`. Override with `SEEDS=...`, `SEED_ROOT_PREFIX=...`,
 or `MERGED_ROOT=...`.
+
+## Experiment directories
+The run scripts now create an experiment root under `outputs/experiments/<tag>/` and write
+batch outputs, plots, and decoding summaries inside it. The `<tag>` includes key parameters
+such as CSV, glyph mode, seed, distractors, runs, temperature, models, and a timestamp
+(plus tiles or seeds for image/multi-cipher runs).
+Override with `EXP_TAG=...` or `EXP_ROOT=...` (or continue to pass `BATCH_ROOT=...`,
+`PLOTS_DIR=...`, `DECODE_OUT=...` for full control).
 
 ## Notes
 - The toy codebook in `visual_language_experiment.py` is intentionally safe; `clean_concepts_new.json` is not used.
